@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AutoClick SatuSehat</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="logo-dot"></div>
+      <div class="header-text">
+        <h1>AutoClick SatuSehat</h1>
+        <p class="subtitle" id="domain-label" title="">memuat domain...</p>
+      </div>
+      <span id="status-badge" class="badge badge-off">OFF</span>
+    </header>
+
+    <div id="domain-notice" class="domain-notice" hidden>
+      Tab aktif bukan halaman web. Buka tab SIMPUS dulu, lalu klik icon ekstensi.
+    </div>
+
+    <section class="section">
+      <h2 class="section-title">Periode</h2>
+      <div class="grid-2">
+        <label class="field">
+          <span>Dari tanggal</span>
+          <input type="date" id="start-date" />
+        </label>
+        <label class="field">
+          <span>Sampai tanggal</span>
+          <input type="date" id="end-date" />
+        </label>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Pengaturan</h2>
+      <label class="field">
+        <span>Total data per halaman (anti paginasi)</span>
+        <select id="page-size">
+          <option value="20">20</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="500">500</option>
+          <option value="1000" selected>1000</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Delay antar aksi (ms)</span>
+        <input type="number" id="delay-ms" min="200" max="10000" step="100" />
+      </label>
+      <label class="field">
+        <span>Timeout tunggu elemen (ms)</span>
+        <input type="number" id="wait-timeout" min="2000" max="60000" step="500" />
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="skip-on-error" />
+        <span>Skip pasien jika error / warning</span>
+      </label>
+    </section>
+
+    <section class="section">
+      <h2 class="section-title">Statistik</h2>
+      <div class="stats">
+        <div class="stat stat-success">
+          <span class="stat-num" id="stat-success">0</span>
+          <span class="stat-label">Sukses</span>
+        </div>
+        <div class="stat stat-warn">
+          <span class="stat-num" id="stat-skipped">0</span>
+          <span class="stat-label">Skip</span>
+        </div>
+        <div class="stat stat-error">
+          <span class="stat-num" id="stat-failed">0</span>
+          <span class="stat-label">Gagal</span>
+        </div>
+        <div class="stat stat-attempted">
+          <span class="stat-num" id="stat-attempted">0</span>
+          <span class="stat-label">Diproses</span>
+        </div>
+      </div>
+      <p class="current-patient" id="current-patient">Pasien: -</p>
+    </section>
+
+    <section class="actions">
+      <button id="btn-start" class="btn btn-primary" type="button">
+        Mulai
+      </button>
+      <button id="btn-stop" class="btn btn-secondary" type="button" disabled>
+        Stop
+      </button>
+      <button id="btn-reset" class="btn btn-ghost" type="button">
+        Reset
+      </button>
+    </section>
+
+    <section class="section">
+      <div class="log-header">
+        <h2 class="section-title">
+          Pasien Gagal / Skip
+          <span class="badge-count" id="failed-count">0</span>
+        </h2>
+        <button id="btn-toggle-failed" class="btn-link" type="button" aria-expanded="false">
+          Tampilkan
+        </button>
+      </div>
+      <div id="failed-list" class="failed-list" hidden></div>
+    </section>
+
+    <section class="section">
+      <div class="log-header">
+        <h2 class="section-title">Log Aktivitas</h2>
+        <button id="btn-clear-log" class="btn-link" type="button">Bersihkan</button>
+      </div>
+      <div id="log-list" class="log-list" aria-live="polite"></div>
+    </section>
+
+    <footer class="footer">
+      <small>v1.0.0 - jalankan extension di tab SIMPUS aktif.</small>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
