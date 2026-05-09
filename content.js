@@ -5,27 +5,35 @@
  * State disimpan di chrome.storage.local supaya tetap nyambung
  * walaupun terjadi navigasi antar halaman (list <-> detail).
  *
- * Workflow:
+ * Workflow umum:
  *   1. Halaman LIST   -> set tanggal -> klik tombol mata pasien pertama
- *   2. Halaman DETAIL -> klik Validasi -> klik Yakin
+ *   2. Halaman DETAIL -> klik tombol aksi (Validasi / Kirim Data) -> klik Yakin
  *   3. Tunggu redirect / toast warning
  *   4. Balik ke LIST -> ulangi
+ *
+ * MODES:
+ *   - "validasi": tombol "Validasi", set page size dropdown
+ *   - "kirim":    tombol "Kirim Data", skip page size
+ *
+ * Storage scheme:
+ *   autoclick_state:<hostname>:<mode>
+ *   autoclick_logs:<hostname>:<mode>
  */
 
 (() => {
   "use strict";
 
-  /**
-   * State diisolasi per-hostname supaya 1 ekstensi bisa dipakai di banyak
-   * client SIMPUS sekaligus tanpa saling polusi (stats, blocklist, dll).
-   * Contoh hostname: "satusehat-simpus-kuta-selatan.badungkab.go.id"
-   */
   const HOSTNAME = (location && location.hostname) || "default";
-  const STORAGE_KEY = `autoclick_state:${HOSTNAME}`;
-  const LOG_KEY = `autoclick_logs:${HOSTNAME}`;
+  const MODES = ["validasi", "kirim"];
   const MAX_LOGS = 200;
+  const MAX_FAILED_DETAILS = 100;
+  const PAGE_SIZE_OPTIONS = [20, 50, 100, 500, 1000];
+
+  const getStateKey = (mode) => `autoclick_state:${HOSTNAME}:${mode}`;
+  const getLogKey = (mode) => `autoclick_logs:${HOSTNAME}:${mode}`;
 
   const DEFAULT_CONFIG = {
+    mode: "validasi",
     isRunning: false,
     startDate: "",
     endDate: "",
@@ -40,10 +48,6 @@
     currentPatientId: "",
     currentPatient: "",
   };
-
-  const PAGE_SIZE_OPTIONS = [20, 50, 100, 500, 1000];
-
-  const MAX_FAILED_DETAILS = 100;
 
   /* ---------- Helpers umum ---------- */
 
@@ -72,29 +76,31 @@
     }
   };
 
-  const getState = async () => {
+  const getState = async (mode) => {
     if (!isContextValid()) {
       handleInvalidContext();
-      return { ...DEFAULT_CONFIG };
+      return { ...DEFAULT_CONFIG, mode };
     }
     try {
-      const data = await chrome.storage.local.get(STORAGE_KEY);
-      return { ...DEFAULT_CONFIG, ...(data[STORAGE_KEY] || {}) };
+      const key = getStateKey(mode);
+      const data = await chrome.storage.local.get(key);
+      return { ...DEFAULT_CONFIG, mode, ...(data[key] || {}) };
     } catch (_) {
       handleInvalidContext();
-      return { ...DEFAULT_CONFIG };
+      return { ...DEFAULT_CONFIG, mode };
     }
   };
 
-  const setState = async (patch) => {
+  const setState = async (mode, patch) => {
     if (!isContextValid()) {
       handleInvalidContext();
       return null;
     }
     try {
-      const current = await getState();
+      const key = getStateKey(mode);
+      const current = await getState(mode);
       const next = { ...current, ...patch };
-      await chrome.storage.local.set({ [STORAGE_KEY]: next });
+      await chrome.storage.local.set({ [key]: next });
       return next;
     } catch (_) {
       handleInvalidContext();
@@ -102,8 +108,8 @@
     }
   };
 
-  const pushLog = async (level, message) => {
-    const tag = `[AutoClick:${level}]`;
+  const pushLog = async (mode, level, message) => {
+    const tag = `[AutoClick:${mode}:${level}]`;
     if (level === "error") console.error(tag, message);
     else if (level === "warn") console.warn(tag, message);
     else console.log(tag, message);
@@ -114,14 +120,15 @@
     }
 
     const time = new Date().toISOString();
-    const entry = { time, level, message };
+    const entry = { time, level, message, mode };
 
     try {
-      const data = await chrome.storage.local.get(LOG_KEY);
-      const logs = data[LOG_KEY] || [];
+      const key = getLogKey(mode);
+      const data = await chrome.storage.local.get(key);
+      const logs = data[key] || [];
       logs.push(entry);
       if (logs.length > MAX_LOGS) logs.splice(0, logs.length - MAX_LOGS);
-      await chrome.storage.local.set({ [LOG_KEY]: logs });
+      await chrome.storage.local.set({ [key]: logs });
     } catch (_) {
       handleInvalidContext();
       return;
@@ -131,6 +138,18 @@
       const p = chrome.runtime.sendMessage({ type: "LOG", entry });
       if (p && typeof p.catch === "function") p.catch(() => {});
     } catch (_) {}
+  };
+
+  /**
+   * Cek mode mana yang sedang isRunning. Hanya satu mode boleh aktif per domain.
+   * Kalau dua-duanya aktif (race), pilih validasi dulu.
+   */
+  const getActiveMode = async () => {
+    for (const m of MODES) {
+      const s = await getState(m);
+      if (s.isRunning) return { mode: m, state: s };
+    }
+    return null;
   };
 
   const waitForElement = async (predicate, timeoutMs = 15000, intervalMs = 200) => {
@@ -260,6 +279,27 @@
     return findByText("button", "Validasi");
   };
 
+  const findKirimDataButton = () => {
+    const candidates = document.querySelectorAll(
+      "button.btn-primary.d-block.w-100, button.btn.btn-primary"
+    );
+    for (const b of candidates) {
+      const txt = (b.textContent || "").trim().toLowerCase();
+      if (txt.includes("kirim data") || txt.includes("kirim")) {
+        if (b.querySelector("i.mdi-send-check-outline, i.mdi-send, i[class*='send']") ||
+            txt.includes("kirim data")) {
+          return b;
+        }
+      }
+    }
+    return findByText("button", "Kirim Data");
+  };
+
+  const findActionButton = (mode) => {
+    if (mode === "kirim") return findKirimDataButton();
+    return findValidasiButton();
+  };
+
   const findYakinButton = () => {
     const modal = document.querySelector(".modal.show, .modal.fade.show");
     const root = modal || document;
@@ -333,13 +373,13 @@
    * - Native select: pakai setNativeValue.
    * - Custom dropdown: klik container -> tunggu options -> klik option yang match.
    */
-  const setPageSize = async (targetValue, delayMs) => {
+  const setPageSize = async (mode, targetValue, delayMs) => {
     const target = parseInt(targetValue, 10);
     if (!target || isNaN(target)) return false;
 
     const found = findTotalDataDropdown();
     if (!found) {
-      await pushLog("warn", "Dropdown 'Total data' tidak ditemukan, dilewati.");
+      await pushLog(mode, "warn", "Dropdown 'Total data' tidak ditemukan, dilewati.");
       return false;
     }
 
@@ -349,13 +389,13 @@
     }
 
     if (found.type === "select") {
-      await pushLog("info", `Set Total data: ${target}`);
+      await pushLog(mode, "info", `Set Total data: ${target}`);
       setNativeValue(found.el, String(target));
       await sleep(delayMs);
       return true;
     }
 
-    await pushLog("info", `Set Total data: ${target}`);
+    await pushLog(mode, "info", `Set Total data: ${target}`);
     realClick(found.el);
     await sleep(300);
 
@@ -389,7 +429,7 @@
     }
 
     if (!option) {
-      await pushLog("warn", `Opsi ${target} tidak ditemukan di dropdown. Coba ketik manual.`);
+      await pushLog(mode, "warn", `Opsi ${target} tidak ditemukan di dropdown. Coba ketik manual.`);
       const inputEl = found.container.querySelector("input");
       if (inputEl) {
         setNativeValue(inputEl, targetText);
@@ -415,7 +455,7 @@
   };
 
   const isDetailPage = () => {
-    if (findValidasiButton()) return true;
+    if (findValidasiButton() || findKirimDataButton()) return true;
     const hasIdentitas = Array.from(document.querySelectorAll("h3, h4, h5, label, div"))
       .some((n) => /identitas\s*pasien/i.test(n.textContent || ""));
     return hasIdentitas;
@@ -483,26 +523,25 @@
 
   let isProcessing = false;
 
-  const handleListPage = async () => {
-    const state = await getState();
+  const handleListPage = async (mode, state) => {
     if (!state.isRunning) return;
 
-    await pushLog("info", "Halaman LIST terdeteksi.");
+    await pushLog(mode, "info", `Halaman LIST terdeteksi (mode: ${mode}).`);
 
-    if (state.pageSize) {
-      await setPageSize(state.pageSize, state.delayMs);
+    if (mode === "validasi" && state.pageSize) {
+      await setPageSize(mode, state.pageSize, state.delayMs);
     }
 
     const startInput = findStartDateInput();
     const endInput = findEndDateInput();
 
     if (startInput && state.startDate && startInput.value !== state.startDate) {
-      await pushLog("info", `Set tanggal mulai: ${state.startDate}`);
+      await pushLog(mode, "info", `Set tanggal mulai: ${state.startDate}`);
       setNativeValue(startInput, state.startDate);
       await sleep(state.delayMs);
     }
     if (endInput && state.endDate && endInput.value !== state.endDate) {
-      await pushLog("info", `Set tanggal sampai: ${state.endDate}`);
+      await pushLog(mode, "info", `Set tanggal sampai: ${state.endDate}`);
       setNativeValue(endInput, state.endDate);
       await sleep(state.delayMs);
     }
@@ -519,10 +558,10 @@
         totalEye === 0
           ? "Tidak ada pasien tersisa di list. Proses selesai."
           : `Semua pasien (${totalEye}) di halaman ini sudah pernah diproses. Proses selesai.`;
-      await pushLog("info", message);
-      await setState({ isRunning: false, currentPatient: "", currentPatientId: "" });
+      await pushLog(mode, "info", message);
+      await setState(mode, { isRunning: false, currentPatient: "", currentPatientId: "" });
       try {
-        chrome.runtime.sendMessage({ type: "FINISHED" }).catch(() => {});
+        chrome.runtime.sendMessage({ type: "FINISHED", mode }).catch(() => {});
       } catch (_) {}
       return;
     }
@@ -535,66 +574,69 @@
       ? attemptedIds
       : [...attemptedIds, patientId];
 
-    await setState({
+    await setState(mode, {
       currentPatient: patientLabel,
       currentPatientId: patientId,
       attemptedIds: nextAttempted,
     });
-    await pushLog("info", `Buka detail pasien: ${patientLabel}`);
+    await pushLog(mode, "info", `Buka detail pasien: ${patientLabel}`);
     realClick(btn);
   };
 
-  const handleDetailPage = async () => {
-    const state = await getState();
+  const handleDetailPage = async (mode, state) => {
     if (!state.isRunning) return;
 
-    await pushLog("info", "Halaman DETAIL terdeteksi.");
+    const actionLabel = mode === "kirim" ? "Kirim Data" : "Validasi";
+    await pushLog(mode, "info", `Halaman DETAIL terdeteksi (mode: ${mode}).`);
 
-    const validasiBtn = await waitForElement(findValidasiButton, state.waitTimeoutMs);
-    if (!validasiBtn) {
-      await pushLog("error", "Tombol Validasi tidak ditemukan.");
-      await markFailed(state, "Tombol Validasi tidak ditemukan");
-      await goBackToList(state);
+    const actionBtn = await waitForElement(
+      () => findActionButton(mode),
+      state.waitTimeoutMs
+    );
+    if (!actionBtn) {
+      await pushLog(mode, "error", `Tombol ${actionLabel} tidak ditemukan.`);
+      await markFailed(mode, state, `Tombol ${actionLabel} tidak ditemukan`);
+      await goBackToList(mode, state);
       return;
     }
     await sleep(state.delayMs);
-    await pushLog("info", "Klik tombol Validasi.");
-    realClick(validasiBtn);
+    await pushLog(mode, "info", `Klik tombol ${actionLabel}.`);
+    realClick(actionBtn);
 
     const yakinBtn = await waitForElement(findYakinButton, state.waitTimeoutMs);
     if (!yakinBtn) {
-      await pushLog("error", "Tombol Yakin tidak ditemukan (modal tidak muncul).");
-      await markFailed(state, "Modal Yakin tidak muncul");
-      await goBackToList(state);
+      await pushLog(mode, "error", "Tombol Yakin tidak ditemukan (modal tidak muncul).");
+      await markFailed(mode, state, "Modal Yakin tidak muncul");
+      await goBackToList(mode, state);
       return;
     }
     await sleep(state.delayMs);
-    await pushLog("info", "Klik tombol Yakin.");
+    await pushLog(mode, "info", "Klik tombol Yakin.");
     realClick(yakinBtn);
 
     const result = await waitForResultAfterYakin(state.waitTimeoutMs);
     if (result.kind === "success") {
-      await pushLog("success", `Validasi berhasil. ${result.message}`);
-      await incStat("success");
+      await pushLog(mode, "success", `${actionLabel} berhasil. ${result.message}`);
+      await incStat(mode, "success");
     } else if (result.kind === "warning") {
-      await pushLog("warn", `Notifikasi: ${result.message}`);
-      await markFailed(state, result.message, "skipped");
+      await pushLog(mode, "warn", `Notifikasi: ${result.message}`);
+      await markFailed(mode, state, result.message, "skipped");
       if (state.skipOnError) {
-        await goBackToList(state);
+        await goBackToList(mode, state);
       } else {
-        await setState({ isRunning: false });
+        await setState(mode, { isRunning: false });
       }
     } else {
-      await pushLog("error", `Timeout setelah klik Yakin.`);
-      await markFailed(state, "Timeout setelah klik Yakin");
-      await goBackToList(state);
+      await pushLog(mode, "error", `Timeout setelah klik Yakin.`);
+      await markFailed(mode, state, "Timeout setelah klik Yakin");
+      await goBackToList(mode, state);
     }
   };
 
-  const incStat = async (key) => {
-    const state = await getState();
+  const incStat = async (mode, key) => {
+    const state = await getState(mode);
     const stats = { ...state.stats, [key]: (state.stats[key] || 0) + 1 };
-    await setState({ stats });
+    await setState(mode, { stats });
   };
 
   /**
@@ -603,7 +645,7 @@
    *  - Simpan detail (id, label, reason, time) di failedDetails buat ditampilkan di popup.
    *  - Naikkan counter stats (default 'failed', bisa 'skipped' kalau warning dari server).
    */
-  const markFailed = async (state, reason, statKey = "failed") => {
+  const markFailed = async (mode, state, reason, statKey = "failed") => {
     const id = state.currentPatientId || "";
     const label = state.currentPatient || "(tidak diketahui)";
 
@@ -625,20 +667,20 @@
 
     const stats = { ...state.stats, [statKey]: (state.stats[statKey] || 0) + 1 };
 
-    await setState({
+    await setState(mode, {
       failedIds: nextFailedIds,
       failedDetails: nextDetails,
       stats,
     });
   };
 
-  const goBackToList = async (state) => {
+  const goBackToList = async (mode, state) => {
     await sleep(state.delayMs);
     if (isListPage()) return;
     try {
       history.back();
     } catch (e) {
-      await pushLog("error", `Gagal back: ${e.message}`);
+      await pushLog(mode, "error", `Gagal back: ${e.message}`);
     }
   };
 
@@ -652,24 +694,26 @@
     }
     isProcessing = true;
     try {
-      const state = await getState();
-      if (!state.isRunning) return;
+      const active = await getActiveMode();
+      if (!active) return;
+
+      const { mode, state } = active;
 
       await sleep(500);
 
       if (isDetailPage()) {
-        await handleDetailPage();
+        await handleDetailPage(mode, state);
       } else if (isListPage()) {
-        await handleListPage();
+        await handleListPage(mode, state);
       } else {
-        await pushLog("info", "Halaman tidak dikenali. Menunggu...");
+        await pushLog(mode, "info", "Halaman tidak dikenali. Menunggu...");
       }
     } catch (e) {
       const msg = (e && e.message) || String(e);
       if (/Extension context invalidated|message port closed/i.test(msg)) {
         handleInvalidContext();
       } else {
-        await pushLog("error", `Exception: ${msg}`);
+        console.error("[AutoClick] Exception:", msg);
       }
     } finally {
       isProcessing = false;
@@ -703,15 +747,19 @@
     if (isContextValid()) setTimeout(run, 400);
   });
 
+  const watchedStateKeys = new Set(MODES.map(getStateKey));
+
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (!isContextValid()) return;
       if (area !== "local") return;
-      if (changes[STORAGE_KEY]) {
-        const next = changes[STORAGE_KEY].newValue;
-        const prev = changes[STORAGE_KEY].oldValue;
+      for (const key of Object.keys(changes)) {
+        if (!watchedStateKeys.has(key)) continue;
+        const next = changes[key].newValue;
+        const prev = changes[key].oldValue;
         if (next && next.isRunning && (!prev || !prev.isRunning)) {
           setTimeout(run, 200);
+          break;
         }
       }
     });

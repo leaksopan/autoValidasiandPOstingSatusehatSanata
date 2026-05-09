@@ -19,6 +19,29 @@
       Tab aktif bukan halaman web. Buka tab SIMPUS dulu, lalu klik icon ekstensi.
     </div>
 
+    <nav class="mode-tabs" role="tablist" aria-label="Mode operasi">
+      <button
+        type="button"
+        role="tab"
+        class="mode-tab is-active"
+        data-mode="validasi"
+        id="tab-validasi"
+        aria-selected="true"
+      >
+        Validasi
+      </button>
+      <button
+        type="button"
+        role="tab"
+        class="mode-tab"
+        data-mode="kirim"
+        id="tab-kirim"
+        aria-selected="false"
+      >
+        Kirim Data
+      </button>
+    </nav>
+
     <section class="section">
       <h2 class="section-title">Periode</h2>
       <div class="grid-2">
@@ -35,7 +58,7 @@
 
     <section class="section">
       <h2 class="section-title">Pengaturan</h2>
-      <label class="field">
+      <label class="field" id="page-size-field">
         <span>Total data per halaman (anti paginasi)</span>
         <select id="page-size">
           <option value="20">20</option>
@@ -84,7 +107,7 @@
 
     <section class="actions">
       <button id="btn-start" class="btn btn-primary" type="button">
-        Mulai
+        <span id="btn-start-label">Mulai Validasi</span>
       </button>
       <button id="btn-stop" class="btn btn-secondary" type="button" disabled>
         Stop
@@ -116,7 +139,7 @@
     </section>
 
     <footer class="footer">
-      <small>v1.0.0 - jalankan extension di tab SIMPUS aktif.</small>
+      <small>v1.1.0 - dual mode (Validasi / Kirim Data) | per-domain isolated state.</small>
     </footer>
 
     <script src="popup.js"></script>

@@ -2,16 +2,18 @@
  * AutoClick SatuSehat - Service Worker (MV3)
  *
  * Tugas:
- *   - Update badge ekstensi PER-TAB sesuai status domain tab itu
- *     (state diisolasi per-hostname).
+ *   - Update badge ekstensi PER-TAB sesuai status domain tab itu.
+ *     Badge "ON" kalau MINIMAL satu mode (validasi/kirim) sedang isRunning.
  *   - Re-broadcast event ke popup kalau popup sedang terbuka.
  *
  * Storage scheme:
- *   `autoclick_state:<hostname>`  -> state per domain
- *   `autoclick_logs:<hostname>`   -> logs per domain
+ *   `autoclick_state:<hostname>:<mode>`  -> state per domain per mode
+ *   `autoclick_logs:<hostname>:<mode>`   -> logs per domain per mode
+ *   mode = "validasi" | "kirim"
  */
 
 const STATE_KEY_PREFIX = "autoclick_state:";
+const MODES = ["validasi", "kirim"];
 
 const getHostnameFromUrl = (url) => {
   try {
@@ -23,6 +25,8 @@ const getHostnameFromUrl = (url) => {
     return "";
   }
 };
+
+const buildStateKeys = (hostname) => MODES.map((m) => `${STATE_KEY_PREFIX}${hostname}:${m}`);
 
 const setBadgeForTab = (tabId, isRunning) => {
   try {
@@ -44,19 +48,19 @@ const refreshBadgeForTab = async (tab) => {
     setBadgeForTab(tab.id, false);
     return;
   }
-  const key = STATE_KEY_PREFIX + hostname;
-  const data = await chrome.storage.local.get(key);
-  const state = data[key];
-  setBadgeForTab(tab.id, !!(state && state.isRunning));
+  const keys = buildStateKeys(hostname);
+  const data = await chrome.storage.local.get(keys);
+  const anyRunning = keys.some((k) => data[k] && data[k].isRunning);
+  setBadgeForTab(tab.id, anyRunning);
 };
 
-const refreshBadgesForHostname = async (hostname, isRunning) => {
+const refreshBadgesForHostname = async (hostname) => {
   if (!hostname) return;
   try {
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
       if (getHostnameFromUrl(tab.url) === hostname) {
-        setBadgeForTab(tab.id, isRunning);
+        await refreshBadgeForTab(tab);
       }
     }
   } catch (_) {}
@@ -83,11 +87,16 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
+  const hostnamesTouched = new Set();
   for (const key of Object.keys(changes)) {
     if (!key.startsWith(STATE_KEY_PREFIX)) continue;
-    const hostname = key.slice(STATE_KEY_PREFIX.length);
-    const next = changes[key].newValue;
-    refreshBadgesForHostname(hostname, !!(next && next.isRunning));
+    const rest = key.slice(STATE_KEY_PREFIX.length);
+    const lastColon = rest.lastIndexOf(":");
+    const hostname = lastColon >= 0 ? rest.slice(0, lastColon) : rest;
+    hostnamesTouched.add(hostname);
+  }
+  for (const h of hostnamesTouched) {
+    refreshBadgesForHostname(h);
   }
 });
 

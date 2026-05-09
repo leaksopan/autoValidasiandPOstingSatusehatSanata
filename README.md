@@ -5,12 +5,16 @@ Chrome Extension untuk otomatisasi validasi data pasien di SIMPUS Badung Sehat /
 Workflow yang diotomatisasi:
 1. Buka halaman **List Data Patient**.
 2. Klik tombol **mata** (action) pada baris pasien pertama.
-3. Di halaman detail, klik tombol **Validasi**.
+3. Di halaman detail, klik tombol **Validasi** (atau **Kirim Data** sesuai mode).
 4. Pada modal konfirmasi, klik **Yakin**.
 5. Tunggu redirect kembali ke list, lalu ulangi pasien berikutnya.
 6. Jika muncul notifikasi *Warning*, pasien di-skip dan lanjut ke pasien berikutnya.
 
-**Multi-client support**: Bisa handle banyak client SIMPUS di tab berbeda secara paralel (selama beda domain). State, blocklist, dan stats diisolasi per-hostname.
+**Dual mode**:
+- **Validasi**: klik tombol "Validasi" + auto set Total data ke 1000 (anti paginasi).
+- **Kirim Data**: klik tombol "Kirim Data" (icon `mdi-send-check-outline`). Tidak perlu set Total data karena di halaman ini semua data sudah muncul.
+
+**Multi-client support**: Bisa handle banyak client SIMPUS di tab berbeda secara paralel (selama beda domain). State, blocklist, dan stats diisolasi per-hostname **dan per-mode**.
 
 ---
 
@@ -30,18 +34,23 @@ Workflow yang diotomatisasi:
 ## Cara Pakai
 
 1. Buka tab Chrome ke halaman SIMPUS lo, login seperti biasa.
-2. Navigasi ke menu **List Data Patient**.
+2. Navigasi ke menu yang sesuai:
+   - Mode **Validasi** -> menu **List Data Patient** (atau apapun yang tampilkan list pasien dengan tombol Validasi di detail).
+   - Mode **Kirim Data** -> menu **Data Tervalidasi** (atau yang tampilkan list pasien dengan tombol Kirim Data di detail).
 3. Klik icon extension di toolbar untuk membuka popup.
-4. Atur konfigurasi:
-   - **Dari tanggal** & **Sampai tanggal**: periode pasien yang mau divalidasi.
-   - **Total data per halaman**: 20 / 50 / 100 / 500 / **1000** (default). Set tinggi supaya semua pasien muat dalam 1 halaman, anti paginasi.
+4. Pilih **mode** di tab atas popup: **Validasi** atau **Kirim Data**.
+5. Atur konfigurasi:
+   - **Dari tanggal** & **Sampai tanggal**: periode pasien yang mau diproses.
+   - **Total data per halaman** *(hanya mode Validasi)*: 20 / 50 / 100 / 500 / **1000** (default). Anti paginasi.
    - **Delay antar aksi (ms)**: jeda tiap aksi (default 1500 ms = 1.5 detik). Naikkan kalau koneksi lambat.
    - **Timeout tunggu elemen (ms)**: berapa lama maksimal nunggu tombol/modal muncul (default 15 detik).
    - **Skip pasien jika error / warning**: jika dicentang (default), pasien yang gagal akan di-skip dan lanjut ke berikutnya.
-5. Klik **Mulai**. Badge extension akan berubah jadi `ON` (hijau).
-6. Biarkan tab Chrome aktif (jangan minimize ke background terlalu lama supaya timer tetap jalan optimal).
-7. Pantau progress di section **Statistik** dan **Log Aktivitas** di popup.
-8. Klik **Stop** kapan saja untuk menghentikan proses.
+6. Klik **Mulai Validasi** / **Mulai Kirim Data**. Badge extension berubah jadi `ON` (hijau).
+7. Biarkan tab Chrome aktif (jangan minimize ke background terlalu lama supaya timer tetap jalan optimal).
+8. Pantau progress di section **Statistik** dan **Log Aktivitas** di popup.
+9. Klik **Stop** kapan saja untuk menghentikan proses.
+
+> **Catatan**: Hanya satu mode yang boleh aktif per domain. Kalau lo mau pindah dari Validasi ke Kirim Data, stop dulu mode aktif via popup.
 
 ---
 
@@ -80,29 +89,31 @@ autoclickSatuSehat/
 - Set value pada input date pakai native value setter prototype agar React mendeteksi perubahan.
 - Notifikasi/toast dideteksi via class umum (`Toastify__toast`, `[class*='toast']`, `[role='alert']`) lalu cek text untuk menentukan success/warning.
 
-### Multi-Client Parallel (anti polusi state antar domain)
+### Multi-Client Parallel + Dual-Mode (anti polusi state antar domain & antar mode)
 
-Storage key di-namespace berdasar hostname tab aktif:
+Storage key di-namespace berdasar **hostname** dan **mode**:
 
 ```
 chrome.storage.local
-├── autoclick_state:client-a.kab.go.id    -> stats, blocklist, isRunning, ...
-├── autoclick_logs:client-a.kab.go.id     -> log aktivitas client A
-├── autoclick_state:client-b.kab.go.id    -> independent state untuk client B
-├── autoclick_logs:client-b.kab.go.id
+├── autoclick_state:client-a.kab.go.id:validasi  -> state validasi client A
+├── autoclick_state:client-a.kab.go.id:kirim     -> state kirim client A
+├── autoclick_logs:client-a.kab.go.id:validasi
+├── autoclick_logs:client-a.kab.go.id:kirim
+├── autoclick_state:client-b.kab.go.id:validasi
+├── autoclick_state:client-b.kab.go.id:kirim
 └── ...
 ```
 
 Behavior:
-- Buka tab di **client A** -> popup nampilin state client A (header popup nampilin domain aktif).
-- Switch tab ke **client B** -> popup nampilin state client B (yang fresh / sebelumnya).
-- Klik **Mulai** di tab client A -> hanya tab client A yang jalan, blocklist isolated.
-- Klik **Mulai** di tab client B -> tab client B jalan paralel dengan client A, ga saling ganggu.
-- **Badge "ON" di icon ekstensi per-tab** -> cuma muncul di tab yang domainnya sedang aktif jalan.
-- **Reset** cuma reset state untuk domain tab aktif, ga ngaruh ke domain lain.
+- Buka tab di **client A** -> popup nampilin state client A. Pilih tab **Validasi** atau **Kirim Data** di atas.
+- Switch tab ke **client B** -> popup nampilin state client B (mode aktifnya menyesuaikan, default Validasi).
+- Mode Validasi & Kirim punya stats, blocklist, dan log **terpisah** -> pasien yang gagal validasi belum tentu gagal kirim.
+- **Badge "ON" di icon ekstensi per-tab** -> menyala kalau MINIMAL satu mode (validasi atau kirim) sedang aktif di domain itu.
+- **Reset** cuma reset state untuk mode + domain tab aktif, ga ngaruh ke mode/domain lain.
 
 Catatan:
 - 2 tab di **domain yang sama** akan share state -> JANGAN buka 2 tab di client yang sama saat extension running, akan race condition / double click.
+- **1 mode per domain pada satu waktu**: kalau mode Validasi sedang jalan, tombol Mulai Kirim Data akan kasih warning. Stop dulu untuk pindah mode.
 - Jumlah client paralel: secara teknis tidak ada batasan, tapi disarankan max 3-5 sekaligus supaya browser tidak overload (tiap tab punya MutationObserver + interval).
 
 ### Flagging Pasien (anti loop pasien gagal)

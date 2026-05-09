@@ -1,19 +1,18 @@
 /**
  * AutoClick SatuSehat - Popup Script
  *
- * Bertugas merender UI, baca/tulis state ke chrome.storage.local,
- * kirim trigger ke content script di tab aktif.
- *
- * MULTI-DOMAIN:
- * Storage key di-namespace berdasar hostname tab aktif. Jadi tiap client
- * SIMPUS punya state independen (stats, blocklist, dll).
- *   key = `autoclick_state:${hostname}`
+ * MULTI-DOMAIN + DUAL-MODE:
+ * Storage key: `autoclick_state:<hostname>:<mode>` dimana mode = "validasi" | "kirim".
+ * Tab switcher di atas popup memilih mode aktif. Switching tab cuma reload UI,
+ * tidak ngubah state. Hanya satu mode boleh isRunning per domain pada satu waktu.
  */
+
+const MODES = ["validasi", "kirim"];
+const DEFAULT_MODE = "validasi";
 
 let activeTab = null;
 let activeHostname = "";
-let STORAGE_KEY = "";
-let LOG_KEY = "";
+let activeMode = DEFAULT_MODE;
 
 const $ = (id) => document.getElementById(id);
 
@@ -24,12 +23,14 @@ const els = {
   waitTimeout: $("wait-timeout"),
   skipOnError: $("skip-on-error"),
   pageSize: $("page-size"),
+  pageSizeField: $("page-size-field"),
   statSuccess: $("stat-success"),
   statSkipped: $("stat-skipped"),
   statFailed: $("stat-failed"),
   statAttempted: $("stat-attempted"),
   currentPatient: $("current-patient"),
   btnStart: $("btn-start"),
+  btnStartLabel: $("btn-start-label"),
   btnStop: $("btn-stop"),
   btnReset: $("btn-reset"),
   btnClearLog: $("btn-clear-log"),
@@ -40,6 +41,7 @@ const els = {
   statusBadge: $("status-badge"),
   domainLabel: $("domain-label"),
   domainNotice: $("domain-notice"),
+  modeTabs: document.querySelectorAll(".mode-tab"),
 };
 
 const todayStr = () => {
@@ -49,6 +51,12 @@ const todayStr = () => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
+
+const getStateKey = (mode) =>
+  activeHostname ? `autoclick_state:${activeHostname}:${mode}` : "";
+
+const getLogKey = (mode) =>
+  activeHostname ? `autoclick_logs:${activeHostname}:${mode}` : "";
 
 const getActiveHostname = async () => {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -65,18 +73,36 @@ const getActiveHostname = async () => {
   }
 };
 
-const getState = async () => {
-  if (!STORAGE_KEY) return {};
-  const data = await chrome.storage.local.get(STORAGE_KEY);
-  return data[STORAGE_KEY] || {};
+const getState = async (mode = activeMode) => {
+  const key = getStateKey(mode);
+  if (!key) return {};
+  const data = await chrome.storage.local.get(key);
+  return data[key] || {};
 };
 
-const saveState = async (patch) => {
-  if (!STORAGE_KEY) return null;
-  const current = await getState();
+const saveState = async (patch, mode = activeMode) => {
+  const key = getStateKey(mode);
+  if (!key) return null;
+  const current = await getState(mode);
   const next = { ...current, ...patch };
-  await chrome.storage.local.set({ [STORAGE_KEY]: next });
+  await chrome.storage.local.set({ [key]: next });
   return next;
+};
+
+const renderModeUI = () => {
+  els.modeTabs.forEach((tab) => {
+    const isActive = tab.dataset.mode === activeMode;
+    tab.classList.toggle("is-active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+
+  if (activeMode === "kirim") {
+    els.pageSizeField.hidden = true;
+    els.btnStartLabel.textContent = "Mulai Kirim Data";
+  } else {
+    els.pageSizeField.hidden = false;
+    els.btnStartLabel.textContent = "Mulai Validasi";
+  }
 };
 
 const renderState = (state) => {
@@ -107,7 +133,7 @@ const renderState = (state) => {
     els.statusBadge.textContent = "OFF";
     els.statusBadge.classList.remove("badge-on");
     els.statusBadge.classList.add("badge-off");
-    els.btnStart.disabled = false;
+    els.btnStart.disabled = !activeHostname;
     els.btnStop.disabled = true;
   }
 };
@@ -171,18 +197,57 @@ const renderLogs = (logs) => {
 };
 
 const loadLogs = async () => {
-  if (!LOG_KEY) {
+  const key = getLogKey(activeMode);
+  if (!key) {
     renderLogs([]);
     return;
   }
-  const data = await chrome.storage.local.get(LOG_KEY);
-  renderLogs(data[LOG_KEY] || []);
+  const data = await chrome.storage.local.get(key);
+  renderLogs(data[key] || []);
+};
+
+const refreshUIFromStorage = async () => {
+  const state = await getState();
+  if (!state.startDate) {
+    state.startDate = todayStr();
+    state.endDate = todayStr();
+  }
+  renderState(state);
+  await loadLogs();
+};
+
+const switchMode = async (newMode) => {
+  if (!MODES.includes(newMode) || newMode === activeMode) return;
+
+  const otherMode = activeMode;
+  const otherState = await getState(otherMode);
+  if (otherState.isRunning) {
+    const ok = confirm(
+      `Mode "${otherMode}" sedang berjalan. Stop dulu sebelum pindah ke "${newMode}"?\n\n` +
+        `Tekan OK untuk stop & pindah, Cancel untuk tetap di mode "${otherMode}".`
+    );
+    if (!ok) return;
+    await saveState({ isRunning: false }, otherMode);
+  }
+
+  activeMode = newMode;
+  renderModeUI();
+  await refreshUIFromStorage();
 };
 
 const handleStart = async () => {
   if (!activeHostname) {
     alert("Tab aktif bukan halaman web (http/https). Buka tab SIMPUS dulu, lalu klik icon ekstensi.");
     return;
+  }
+
+  for (const m of MODES) {
+    if (m === activeMode) continue;
+    const s = await getState(m);
+    if (s.isRunning) {
+      alert(`Mode "${m}" sedang aktif untuk domain ini. Stop dulu sebelum mulai mode "${activeMode}".`);
+      return;
+    }
   }
 
   const startDate = els.startDate.value;
@@ -199,6 +264,7 @@ const handleStart = async () => {
 
   await saveState({
     isRunning: true,
+    mode: activeMode,
     startDate,
     endDate,
     delayMs,
@@ -235,7 +301,12 @@ const handleStop = async () => {
 };
 
 const handleReset = async () => {
-  if (!confirm(`Reset SEMUA data untuk domain "${activeHostname}"?\n\nStatistik, blocklist pasien gagal, dan pasien aktif akan dihapus.`))
+  if (
+    !confirm(
+      `Reset SEMUA data mode "${activeMode}" untuk domain "${activeHostname}"?\n\n` +
+        `Statistik, blocklist pasien gagal, dan pasien aktif akan dihapus.`
+    )
+  )
     return;
   await saveState({
     stats: { success: 0, failed: 0, skipped: 0 },
@@ -261,8 +332,9 @@ const handleToggleFailed = () => {
 };
 
 const handleClearLog = async () => {
-  if (!LOG_KEY) return;
-  await chrome.storage.local.set({ [LOG_KEY]: [] });
+  const key = getLogKey(activeMode);
+  if (!key) return;
+  await chrome.storage.local.set({ [key]: [] });
   renderLogs([]);
 };
 
@@ -279,28 +351,41 @@ const renderDomainHeader = () => {
   }
 };
 
+/**
+ * Saat popup dibuka, pilih mode aktif berdasar mana yang isRunning.
+ * Kalau dua-duanya OFF, default ke "validasi".
+ */
+const detectInitialMode = async () => {
+  for (const m of MODES) {
+    const s = await getState(m);
+    if (s.isRunning) return m;
+  }
+  return DEFAULT_MODE;
+};
+
 const init = async () => {
   const { tab, hostname } = await getActiveHostname();
   activeTab = tab;
   activeHostname = hostname;
-  STORAGE_KEY = hostname ? `autoclick_state:${hostname}` : "";
-  LOG_KEY = hostname ? `autoclick_logs:${hostname}` : "";
 
   renderDomainHeader();
 
-  const state = await getState();
-  if (!state.startDate) {
-    state.startDate = todayStr();
-    state.endDate = todayStr();
+  if (activeHostname) {
+    activeMode = await detectInitialMode();
   }
-  renderState(state);
-  await loadLogs();
+
+  renderModeUI();
+  await refreshUIFromStorage();
 
   els.btnStart.addEventListener("click", handleStart);
   els.btnStop.addEventListener("click", handleStop);
   els.btnReset.addEventListener("click", handleReset);
   els.btnClearLog.addEventListener("click", handleClearLog);
   els.btnToggleFailed.addEventListener("click", handleToggleFailed);
+
+  els.modeTabs.forEach((tab) => {
+    tab.addEventListener("click", () => switchMode(tab.dataset.mode));
+  });
 
   ["startDate", "endDate", "delayMs", "waitTimeout", "pageSize"].forEach((key) => {
     els[key].addEventListener("change", async () => {
@@ -320,11 +405,13 @@ const init = async () => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (STORAGE_KEY && changes[STORAGE_KEY]) {
-    renderState(changes[STORAGE_KEY].newValue || {});
+  const stateKey = getStateKey(activeMode);
+  const logKey = getLogKey(activeMode);
+  if (stateKey && changes[stateKey]) {
+    renderState(changes[stateKey].newValue || {});
   }
-  if (LOG_KEY && changes[LOG_KEY]) {
-    renderLogs(changes[LOG_KEY].newValue || []);
+  if (logKey && changes[logKey]) {
+    renderLogs(changes[logKey].newValue || []);
   }
 });
 

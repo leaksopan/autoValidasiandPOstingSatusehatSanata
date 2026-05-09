@@ -55,6 +55,54 @@ body {
   font-weight: 500;
 }
 
+.mode-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.mode-tab {
+  padding: 10px 8px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s, background 0.15s;
+  font-family: inherit;
+  border-bottom: 2px solid transparent;
+}
+
+.mode-tab:hover {
+  color: #14b8a6;
+  background: #f0fdfa;
+}
+
+.mode-tab.is-active {
+  color: #0e9384;
+  background: #f0fdfa;
+  border-bottom-color: #14b8a6;
+}
+
+.mode-tab[data-mode="kirim"]::before {
+  content: "→";
+  margin-right: 4px;
+  font-weight: 700;
+}
+
+.mode-tab[data-mode="validasi"]::before {
+  content: "✓";
+  margin-right: 4px;
+  font-weight: 700;
+}
+
+.field[hidden] {
+  display: none !important;
+}
+
 .logo-dot {
   width: 28px;
   height: 28px;
